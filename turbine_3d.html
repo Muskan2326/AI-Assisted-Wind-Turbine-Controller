@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#f4f7fa;font-family:Arial,sans-serif}
+#stage{position:relative;width:100%;height:650px;background:linear-gradient(180deg,#ffffff 0%,#f2f6f9 100%);overflow:hidden}
+canvas{display:block;width:100%;height:100%}
+#hud{position:absolute;top:14px;left:14px;z-index:2;display:flex;gap:8px;flex-wrap:wrap;max-width:95%}
+.pill{background:rgba(255,255,255,.94);border:1px solid #d8e2eb;border-radius:9px;padding:8px 11px;color:#18334a;box-shadow:0 3px 12px #16324b12;font-size:12px}
+.pill b{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#64788b;margin-bottom:3px}
+#status{position:absolute;bottom:12px;left:14px;background:#fff;border:1px solid #d8e2eb;border-radius:8px;padding:7px 10px;color:#506477;font-size:11px}
+#hint{position:absolute;bottom:12px;right:14px;color:#64788b;font-size:11px}
+</style>
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}
+</script>
+</head>
+<body>
+<div id="stage">
+  <div id="hud">
+    <div class="pill"><b>Rotor speed</b><span id="rpm">--</span></div>
+    <div class="pill"><b>Wind speed</b><span id="wind">--</span></div>
+    <div class="pill"><b>Blade pitch</b><span id="pitch">--</span></div>
+    <div class="pill"><b>Generator torque</b><span id="torque">--</span></div>
+  </div>
+  <div id="status">Loading Blender model…</div>
+  <div id="hint">Drag to orbit · Scroll to zoom</div>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const stage = document.getElementById('stage');
+const rotorSpeed = Number('__ROTOR_SPEED__') || 0;
+const windSpeed = Number('__WIND_SPEED__') || 0;
+const pitchAngle = Number('__PITCH_ANGLE__') || 0;
+const torque = Number('__GENERATOR_TORQUE__') || 0;
+document.getElementById('rpm').textContent = (rotorSpeed*60/(2*Math.PI)).toFixed(1)+' RPM';
+document.getElementById('wind').textContent = windSpeed.toFixed(2)+' m/s';
+document.getElementById('pitch').textContent = pitchAngle.toFixed(1)+'°';
+document.getElementById('torque').textContent = torque.toFixed(3)+' pu';
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xf4f7fa);
+scene.fog = new THREE.Fog(0xf4f7fa, 65, 150);
+const camera = new THREE.PerspectiveCamera(38, stage.clientWidth/stage.clientHeight, 0.1, 300);
+camera.up.set(0,1,0);
+camera.position.set(28,24,38);
+const renderer = new THREE.WebGLRenderer({antialias:true, alpha:false});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+renderer.setSize(stage.clientWidth,stage.clientHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+stage.appendChild(renderer.domElement);
+const controls = new OrbitControls(camera,renderer.domElement);
+controls.target.set(0,12,0); controls.enableDamping=true; controls.dampingFactor=.08; controls.minDistance=12; controls.maxDistance=100; controls.update();
+scene.add(new THREE.HemisphereLight(0xffffff,0xc4d1dc,2.0));
+function area(color,intensity,pos){const l=new THREE.DirectionalLight(color,intensity);l.position.set(...pos);scene.add(l);}
+area(0xffffff,3,[ -20,-30,45]); area(0xdceeff,1.6,[25,5,30]); area(0xffffff,2,[0,25,38]);
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(200,200),new THREE.MeshStandardMaterial({color:0xf4f7fa,roughness:.92}));
+floor.rotation.x=-Math.PI/2; floor.position.y=-0.08; // Three.js uses Y-up; ground lies in XZ plane
+scene.add(floor);
+const grid = new THREE.GridHelper(80,40,0xd5e0e8,0xe7edf2); grid.position.y=0; scene.add(grid);
+
+// Wind streaks give a subtle visible indication of airflow.
+const windGroup = new THREE.Group(); scene.add(windGroup);
+const windMaterial = new THREE.LineBasicMaterial({color:0x4aa3cf,transparent:true,opacity:.5});
+const windStreaks=[];
+for(let i=0;i<24;i++){
+  const z=-13+(i%8)*3.4, y=3+Math.floor(i/8)*8;
+  const pts=[new THREE.Vector3(-18,y,z),new THREE.Vector3(-14,y,z)];
+  const line=new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),windMaterial);
+  windGroup.add(line); windStreaks.push({line,y,z,offset:i*1.7});
+}
+
+const loader = new GLTFLoader();
+const base64 = '__GLB_BASE64__';
+let rotor = null;
+let model = null;
+function decodeBase64ToArrayBuffer(b64){
+  const binary=atob(b64); const bytes=new Uint8Array(binary.length);
+  for(let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i);
+  return bytes.buffer;
+}
+loader.parse(decodeBase64ToArrayBuffer(base64),'',gltf=>{
+  model=gltf.scene;
+  scene.add(model);
+  model.traverse(o=>{
+    if(o.name==='Rotor_Assembly') rotor=o;
+    if(o.isMesh){o.castShadow=true;o.receiveShadow=true;}
+  });
+  // Fit camera around turbine's real bounds while keeping tower visible.
+  const box=new THREE.Box3().setFromObject(model);
+  const center=box.getCenter(new THREE.Vector3());
+  const sphere=box.getBoundingSphere(new THREE.Sphere());
+  controls.target.copy(center);
+  // Frame the complete turbine with Y as the vertical axis (glTF convention).
+  const radius=Math.max(sphere.radius,8);
+  const distance=radius/Math.sin(THREE.MathUtils.degToRad(camera.fov*0.5))*0.72;
+  camera.position.set(center.x+distance*0.72,center.y+distance*0.35,center.z+distance);
+  camera.near=0.1; camera.far=Math.max(300,distance*8); camera.updateProjectionMatrix();
+  controls.minDistance=radius*0.8; controls.maxDistance=radius*5;
+  controls.update();
+  document.getElementById('status').textContent='Blender GLB loaded · simulation-linked preview';
+},err=>{
+  console.error(err);
+  document.getElementById('status').textContent='Could not load model. Check the GLB export and internet access for Three.js.';
+});
+
+let last=performance.now();
+function animate(now){
+  requestAnimationFrame(animate);
+  const dt=Math.min((now-last)/1000,.05); last=now;
+  if(rotor) rotor.rotation.x += rotorSpeed*dt;
+  windStreaks.forEach((w,i)=>{
+    const x=-18+((now/1000*(1.4+windSpeed*.18)+w.offset)%18);
+    w.line.geometry.setFromPoints([new THREE.Vector3(x,w.y,w.z),new THREE.Vector3(x+2.5,w.y,w.z)]);
+  });
+  controls.update(); renderer.render(scene,camera);
+}
+requestAnimationFrame(animate);
+window.addEventListener('resize',()=>{
+  camera.aspect=stage.clientWidth/stage.clientHeight; camera.updateProjectionMatrix();
+  renderer.setSize(stage.clientWidth,stage.clientHeight);
+});
+</script>
+</body>
+</html>

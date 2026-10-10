@@ -1,0 +1,11 @@
+Scenario,Controller,MaxDisturbanceEffect,RecoveryTime_s,EffectStatus,RecoveryStatus,Overall
+NormalOperation,Open-loop,0.0,0.0,PASS,PASS,PASS
+NormalOperation,PID,0.0,0.0,PASS,PASS,PASS
+ShortWindGust,Open-loop,0.655055077765772,2.99,FAIL,FAIL,FAIL
+ShortWindGust,PID,0.0635974771975114,0.0,PASS,PASS,PASS
+LongWindGust,Open-loop,1.59588401759375,5.19,FAIL,FAIL,FAIL
+LongWindGust,PID,0.0635974771975114,0.0,PASS,PASS,PASS
+WindSpeedDrop,Open-loop,1.39664601657461,4.86,FAIL,FAIL,FAIL
+WindSpeedDrop,PID,0.0635974771975114,0.0,PASS,PASS,PASS
+SensorNoise,Open-loop,0.0,0.0,PASS,PASS,PASS
+SensorNoise,PID,0.011486668943709,0.0,PASS,PASS,PASS

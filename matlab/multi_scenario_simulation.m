@@ -1,0 +1,225 @@
+%% Multi-Scenario Wind Turbine Controller Validation
+% Educational generator model: Open-loop vs PID
+% Scenarios: Normal, Short Gust, Long Gust, Wind-Speed Drop, Sensor Noise
+
+clear;
+clc;
+close all;
+
+%% 1. Model parameters (consistent with existing model)
+J = 0.05;
+B = 0.02;
+omega_ref = 10;
+
+dt = 0.01;
+T_end = 20;
+t = 0:dt:T_end;
+N = numel(t);
+
+T_drive_0 = B * omega_ref;
+
+%% 2. PID parameters (same as existing script)
+Kp = 0.5;
+Ki = 0.5;
+Kd = 0.01;
+
+T_adjust_max = 0.10;
+integral_limit = 1.0;
+
+%% 3. Define scenarios
+scenario_names = {
+    'NormalOperation'
+    'ShortWindGust'
+    'LongWindGust'
+    'WindSpeedDrop'
+    'SensorNoise'
+};
+
+% Each row: disturbance start, end, torque multiplier
+scenario_params = [
+    0,  0, 1.00
+    4,  5, 1.20
+    4,  8, 1.20
+    4,  7, 0.80
+    4,  8, 1.00
+];
+
+rng(42);  % Reproducible sensor noise
+
+results = table();
+all_responses = table();
+
+%% 4. Run every scenario
+for s = 1:numel(scenario_names)
+
+    scenario = scenario_names{s};
+
+    disturbance_start = scenario_params(s,1);
+    disturbance_end = scenario_params(s,2);
+    torque_factor = scenario_params(s,3);
+
+    % Driving torque input
+    T_drive = T_drive_0 * ones(1,N);
+
+    if disturbance_start < disturbance_end
+        mask = t >= disturbance_start & t < disturbance_end;
+        T_drive(mask) = torque_factor * T_drive_0;
+    else
+        mask = false(1,N);
+    end
+
+    % Open-loop response
+    omega_open = zeros(1,N);
+    omega_open(1) = omega_ref;
+
+    for k = 1:N-1
+        domega = (T_drive(k) - B*omega_open(k))/J;
+        omega_open(k+1) = omega_open(k) + dt*domega;
+    end
+
+
+    % PID response
+    omega_pid = zeros(1,N);
+    omega_pid(1) = omega_ref;
+
+    T_gen = zeros(1,N);
+    integral_error = 0;
+    previous_error = 0;
+
+    measurement_noise = zeros(1,N);
+    if strcmp(scenario,'SensorNoise')
+        measurement_noise = 0.01 * randn(1,N);
+    end
+
+    for k = 1:N-1
+        measured_speed = omega_pid(k) + measurement_noise(k);
+        error = omega_ref - measured_speed;
+
+        integral_error = integral_error + error*dt;
+        integral_error = max(-integral_limit, ...
+            min(integral_limit, integral_error));
+
+        derivative_error = (error - previous_error)/dt;
+
+        % PID torque correction
+        % T_gen is SUBTRACTED in the generator dynamics below, so
+        % the controller torque must have the opposite sign to the
+        % conventional PID correction based on (reference - measured).
+        torque_command = -(Kp*error ...
+            + Ki*integral_error ...
+            + Kd*derivative_error);
+
+        torque_command = max(-T_adjust_max, ...
+            min(T_adjust_max, torque_command));
+
+        T_gen(k) = torque_command;
+
+        % Generator dynamics
+        domega = (T_drive(k) - B*omega_pid(k) ...
+            - T_gen(k))/J;
+
+        omega_pid(k+1) = omega_pid(k) + dt*domega;
+        previous_error = error;
+    end
+
+
+controller_labels = ["Open-loop", "PID"];
+
+    %% 5. Calculate disturbance metrics
+    responses = {omega_open, omega_pid};
+
+    for c = 1:2
+
+        y = responses{c};
+
+        if disturbance_start < disturbance_end
+            disturbance_mask = mask;
+        else
+            disturbance_mask = false(1,N);
+        end
+
+        if any(disturbance_mask)
+            max_deviation = max(abs(y(disturbance_mask)-omega_ref));
+        else
+            max_deviation = 0;
+        end
+
+        % Recovery: first time after disturbance end when
+        % the response stays within 2% for the remaining simulation
+        recovery_time = NaN;
+
+        if disturbance_start < disturbance_end
+            post_idx = find(t >= disturbance_end);
+
+            for q = 1:numel(post_idx)
+                k = post_idx(q);
+
+                if all(abs(y(k:end)-omega_ref) <= 0.02*abs(omega_ref))
+                    recovery_time = t(k)-disturbance_end;
+                    break;
+                end
+            end
+        else
+            recovery_time = 0;
+        end
+
+
+        % Record results
+        row = table( ...
+            string(scenario), ...
+            controller_labels(c), ...
+            max_deviation, ...
+            recovery_time, ...
+            'VariableNames', ...
+            {'Scenario', 'Controller', ...
+            'MaxDisturbanceEffect', 'RecoveryTime_s'});
+
+        results = [results; row];
+
+
+        % Store response time series
+        trace = table( ...
+            repmat(string(scenario),N,1), ...
+            repmat(controller_labels(c),N,1), ...
+            t(:), y(:), ...
+            'VariableNames', ...
+            {'Scenario','Controller','Time_s','Speed_rad_s'});
+
+        all_responses = [all_responses; trace];
+    end
+
+    %% 6. Plot each scenario
+    figure('Name',scenario);
+    plot(t,omega_open,'LineWidth',1.5);
+    hold on;
+    plot(t,omega_pid,'LineWidth',1.5);
+    yline(omega_ref,'--');
+    if disturbance_start < disturbance_end
+        xline(disturbance_start,':');
+        xline(disturbance_end,':');
+    end
+    xlabel('Time (seconds)');
+    ylabel('Angular speed (rad/s)');
+    title(strrep(scenario,'_',' '));
+    legend('Open-loop','PID','Reference','Location','best');
+    grid on;
+end
+
+%% 7. Export CSV files
+project_root = fileparts(fileparts(mfilename('fullpath')));
+output_dir = fullfile(project_root,'results');
+
+if ~isfolder(output_dir)
+    mkdir(output_dir);
+end
+
+writetable(results, ...
+    fullfile(output_dir,'disturbance_results.csv'));
+
+writetable(all_responses, ...
+    fullfile(output_dir,'multi_scenario_timeseries.csv'));
+
+disp('MULTI-SCENARIO RESULTS');
+disp(results);
+
+fprintf('\nResults saved to: %s\n',output_dir);

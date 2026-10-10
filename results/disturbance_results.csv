@@ -1,0 +1,11 @@
+Scenario,Controller,MaxDisturbanceEffect,RecoveryTime_s
+NormalOperation,Open-loop,0,0
+NormalOperation,PID,0,0
+ShortWindGust,Open-loop,0.655055077765772,2.99
+ShortWindGust,PID,0.0635974771975114,0
+LongWindGust,Open-loop,1.59588401759375,5.19
+LongWindGust,PID,0.0635974771975114,0
+WindSpeedDrop,Open-loop,1.39664601657461,4.86
+WindSpeedDrop,PID,0.0635974771975114,0
+SensorNoise,Open-loop,0,0
+SensorNoise,PID,0.011486668943709,0
